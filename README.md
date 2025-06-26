@@ -1,8 +1,3 @@
-Here’s a clean and professional `README.md` file for your **BottomSheetManager** GitHub repo:
-
----
-
-````markdown
 # 📦 BottomSheetManager
 
 A fully customizable and reusable **Bottom Sheet Manager** for iOS, built with UIKit in Swift.  
@@ -120,8 +115,6 @@ Created with ❤️ by [@chaudharyyagh](https://medium.com/@chaudharyyagh)
 
 Found a bug or want to improve the bottom sheet?
 Open an issue or submit a pull request — contributions are welcome!
-
-```
 
 ---
 
