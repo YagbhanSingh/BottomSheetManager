@@ -1,0 +1,62 @@
+
+// MARK: - Bottom Sheet Manager
+public final class BottomSheetManager {
+    private var currentSheet: BottomSheetViewController?
+    static let shared = BottomSheetManager()
+    private init() {}
+    
+    func present(
+        contentViewController: UIViewController,
+        from parentVC: UIViewController,
+        defaultHeight: CGFloat = 300,
+        showDragIndicator: Bool = true,
+        isDraggableToExpand: Bool = true,
+        isDraggableToDismiss: Bool = true,
+        isTapToDismissEnabled: Bool = true,
+        cornerRadius: CGFloat = 16,
+        backgroundStyle: BottomSheetBackgroundStyle = .dimmed(alpha: 0.6),
+        delegate: BottomSheetControllerDelegate? = nil,
+        startFullExpanded: Bool = false,
+        snapPoints: [CGFloat] = []
+    ) {
+        let bottomSheet = BottomSheetViewController(
+            contentViewController: contentViewController,
+            defaultHeight: defaultHeight,
+            showDragIndicator: showDragIndicator,
+            isDraggableToExpand: isDraggableToExpand,
+            isDraggableToDismiss: isDraggableToDismiss,
+            isTapToDismissEnabled: isTapToDismissEnabled,
+            cornerRadius: cornerRadius,
+            backgroundStyle: backgroundStyle
+        )
+        bottomSheet.delegate = delegate
+        self.currentSheet = bottomSheet
+        bottomSheet.startExpanded = startFullExpanded
+        bottomSheet.snapPoints = snapPoints.sorted() // 🔁 Ensure sorted (lowest to highest)
+        parentVC.present(bottomSheet, animated: false)
+    }
+    
+    func dismiss() {
+        currentSheet?.animateDismissView()
+        currentSheet = nil
+    }
+    
+}
+
+
+///   -------How to USE this Bottom Sheet Manager:------
+//BottomSheetManager.shared.present(
+//    contentViewController: SampleBottomContentVC(),
+//    from: self,
+//    defaultHeight: 350,
+//    showDragIndicator: true,
+//    isDraggableToExpand: false, // 🔒 fixed height
+//    isDraggableToDismiss: false, // 🔒 fully fixed bottom sheet
+//    isTapToDismissEnabled: false, // ❌ disables dimmed background tap to dismiss
+//    cornerRadius: 32, // custom corner radius
+//    backgroundStyle: .dimmed(alpha: 0.6),
+//    startFullExpanded: true,
+//    snapPoints: [200, 400, UIScreen.main.bounds.height - 64] // collapsed, mid, full
+//)
+//
+//   ---- BottomSheetManager.shared.dismiss() -- To dismiss sheet
