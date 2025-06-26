@@ -1,0 +1,344 @@
+import UIKit
+
+// MARK: - Background Style Enum
+enum BottomSheetBackgroundStyle {
+    case dimmed(alpha: CGFloat)
+    case blurred(style: UIBlurEffect.Style, alpha: CGFloat)
+    case none
+}
+
+// MARK: - Delegate Protocol
+@objc protocol BottomSheetControllerDelegate: NSObjectProtocol {
+    @objc optional func bottomSheetDidDismiss()
+    @objc optional func bottomSheetDidExpand()
+    @objc optional func bottomSheetDidCollapse()
+    @objc optional func bottomSheetIsDragging(yOffset: CGFloat)
+}
+
+// MARK: - Bottom Sheet View Controller
+final class BottomSheetViewController: UIViewController {
+    
+    // MARK: - Public Properties
+    weak var delegate: BottomSheetControllerDelegate?
+    var startExpanded: Bool = false
+    var snapPoints: [CGFloat] = []
+    
+    // MARK: - Private Properties
+    private let contentViewController: UIViewController
+    private let showDragIndicator: Bool
+    private let isDraggableToExpand: Bool
+    private let isDraggableToDismiss: Bool
+    private let isTapToDismissEnabled: Bool
+    private let cornerRadius: CGFloat
+    private let backgroundStyle: BottomSheetBackgroundStyle
+    
+    private var currentContainerHeight: CGFloat
+    private var defaultHeight: CGFloat
+    private let dismissibleHeight: CGFloat = 200
+    private var maximumContainerHeight: CGFloat {
+        UIScreen.main.bounds.height - 64
+    }
+    private let maxDimmedAlpha: CGFloat = 0.6
+    
+    private var containerViewHeightConstraint: NSLayoutConstraint?
+    private var containerViewBottomConstraint: NSLayoutConstraint?
+    
+    // MARK: - UI Elements
+    private lazy var dragIndicatorView: UIView = {
+        let indicator = UIView()
+        indicator.backgroundColor = UIColor(white: 0.8, alpha: 1.0)
+        indicator.layer.cornerRadius = 3
+        return indicator
+    }()
+    
+    private lazy var containerView: UIView = {
+        let view = UIView()
+        view.backgroundColor = .white
+        view.layer.cornerRadius = cornerRadius
+        view.clipsToBounds = false
+        view.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        view.layer.shadowColor = UIColor.black.cgColor
+        view.layer.shadowOpacity = 0.15
+        view.layer.shadowOffset = CGSize(width: 0, height: -2)
+        view.layer.shadowRadius = 12
+        return view
+    }()
+    
+    private lazy var backgroundView: UIView = {
+        switch backgroundStyle {
+        case .dimmed(let alpha):
+            let view = UIView()
+            view.backgroundColor = .black
+            view.alpha = alpha
+            return view
+        case .blurred(let style, let alpha):
+            let blurEffect = UIBlurEffect(style: style)
+            let blurView = UIVisualEffectView(effect: blurEffect)
+            blurView.alpha = alpha
+            return blurView
+        case .none:
+            let view = UIView()
+            view.backgroundColor = .clear
+            return view
+        }
+    }()
+    
+    // MARK: - Initializer
+    init(
+        contentViewController: UIViewController,
+        defaultHeight: CGFloat = 300,
+        showDragIndicator: Bool = true,
+        isDraggableToExpand: Bool = true,
+        isDraggableToDismiss: Bool = true,
+        isTapToDismissEnabled: Bool = true,
+        cornerRadius: CGFloat = 16,
+        backgroundStyle: BottomSheetBackgroundStyle = .dimmed(alpha: 0.6)
+    ) {
+        self.contentViewController = contentViewController
+        self.defaultHeight = defaultHeight
+        self.currentContainerHeight = defaultHeight
+        self.showDragIndicator = showDragIndicator
+        self.isDraggableToExpand = isDraggableToExpand
+        self.isDraggableToDismiss = isDraggableToDismiss
+        self.isTapToDismissEnabled = isTapToDismissEnabled
+        self.cornerRadius = cornerRadius
+        self.backgroundStyle = backgroundStyle
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .overFullScreen
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    // MARK: - View Lifecycle
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        setupView()
+        setupConstraints()
+        setupPanGesture()
+    }
+    
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        animateShowDimmedView()
+        animatePresentContainer()
+        view.isUserInteractionEnabled = true
+        
+        if startExpanded {
+            view.isUserInteractionEnabled = false
+            animateContainerHeight(UIScreen.main.bounds.height)
+            delegate?.bottomSheetDidExpand?()
+        }
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleKeyboardWillShow(_:)),
+            name: UIResponder.keyboardWillShowNotification,
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleKeyboardWillHide(_:)),
+            name: UIResponder.keyboardWillHideNotification,
+            object: nil
+        )
+        
+    }
+    
+    @objc private func handleKeyboardWillShow(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let keyboardFrame = userInfo[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
+              let duration = userInfo[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double else {
+            return
+        }
+        
+        let keyboardHeight = keyboardFrame.height
+        let newHeight = UIScreen.main.bounds.height - keyboardHeight - 16 // leave a gap if needed
+        
+        UIView.animate(withDuration: duration) {
+            self.containerViewBottomConstraint?.constant = -keyboardHeight
+            self.containerViewHeightConstraint?.constant = newHeight
+            self.view.layoutIfNeeded()
+        }
+    }
+    
+    @objc private func handleKeyboardWillHide(_ notification: Notification) {
+        guard let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double else {
+            return
+        }
+        
+        UIView.animate(withDuration: duration) {
+            self.containerViewBottomConstraint?.constant = 0
+            self.containerViewHeightConstraint?.constant = self.currentContainerHeight
+            self.view.layoutIfNeeded()
+        }
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+    
+    // MARK: - Setup Methods
+    private func setupView() {
+        view.backgroundColor = .clear
+        if isTapToDismissEnabled {
+            let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleCloseAction))
+            backgroundView.addGestureRecognizer(tapGesture)
+        }
+    }
+    
+    private func setupConstraints() {
+        view.addSubview(backgroundView)
+        view.addSubview(containerView)
+        addChild(contentViewController)
+        containerView.addSubview(contentViewController.view)
+        contentViewController.didMove(toParent: self)
+        
+        backgroundView.translatesAutoresizingMaskIntoConstraints = false
+        containerView.translatesAutoresizingMaskIntoConstraints = false
+        dragIndicatorView.translatesAutoresizingMaskIntoConstraints = false
+        contentViewController.view.translatesAutoresizingMaskIntoConstraints = false
+        
+        NSLayoutConstraint.activate([
+            backgroundView.topAnchor.constraint(equalTo: view.topAnchor),
+            backgroundView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            backgroundView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            backgroundView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            
+            containerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            containerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            
+            contentViewController.view.bottomAnchor.constraint(equalTo: containerView.bottomAnchor),
+            contentViewController.view.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+            contentViewController.view.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
+        ])
+        
+        if showDragIndicator {
+            containerView.addSubview(dragIndicatorView)
+            NSLayoutConstraint.activate([
+                dragIndicatorView.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 8),
+                dragIndicatorView.centerXAnchor.constraint(equalTo: containerView.centerXAnchor),
+                dragIndicatorView.widthAnchor.constraint(equalToConstant: 40),
+                dragIndicatorView.heightAnchor.constraint(equalToConstant: 6),
+            ])
+        }
+        
+        let topAnchor = showDragIndicator ? dragIndicatorView.bottomAnchor : containerView.topAnchor
+        contentViewController.view.topAnchor.constraint(equalTo: topAnchor, constant: 8).isActive = true
+        
+        containerViewHeightConstraint = containerView.heightAnchor.constraint(equalToConstant: defaultHeight)
+        containerViewBottomConstraint = containerView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: defaultHeight)
+        containerViewHeightConstraint?.isActive = true
+        containerViewBottomConstraint?.isActive = true
+    }
+    
+    private func setupPanGesture() {
+        let panGesture = UIPanGestureRecognizer(target: self, action: #selector(handlePanGesture(gesture:)))
+        view.addGestureRecognizer(panGesture)
+    }
+    
+    // MARK: - Gesture Handlers
+    @objc private func handleCloseAction() {
+        animateDismissView()
+    }
+    
+    @objc private func handlePanGesture(gesture: UIPanGestureRecognizer) {
+        let translation = gesture.translation(in: view)
+        let isDraggingDown = translation.y > 0
+        let newHeight = currentContainerHeight - translation.y
+        
+        switch gesture.state {
+        case .changed:
+            if newHeight < maximumContainerHeight {
+                let allowExpand = isDraggableToExpand || newHeight <= defaultHeight
+                let allowDismiss = isDraggableToDismiss || newHeight >= defaultHeight
+                
+                if allowExpand && allowDismiss {
+                    containerViewHeightConstraint?.constant = newHeight
+                    view.layoutIfNeeded()
+                    delegate?.bottomSheetIsDragging?(yOffset: translation.y)
+                    
+                    let percentage = min(max(newHeight / maximumContainerHeight, 0), 1)
+                    dragIndicatorView.alpha = 1 - (percentage * 0.8)
+                    dragIndicatorView.transform = CGAffineTransform(scaleX: 1 - percentage * 0.3, y: 1)
+                }
+            }
+            dragIndicatorView.isHidden = newHeight >= maximumContainerHeight
+            
+        case .ended:
+            dragIndicatorView.alpha = 1
+            dragIndicatorView.transform = .identity
+            let targetHeight: CGFloat
+            
+            // If using snap points
+            if !snapPoints.isEmpty {
+                // Calculate nearest snap point
+                let closest = snapPoints.min(by: { abs($0 - newHeight) < abs($1 - newHeight) }) ?? defaultHeight
+                targetHeight = closest
+            } else {
+                // Fallback to default behavior
+                if newHeight < dismissibleHeight && isDraggableToDismiss {
+                    animateDismissView()
+                    return
+                } else if newHeight < defaultHeight || isDraggingDown {
+                    targetHeight = defaultHeight
+                    delegate?.bottomSheetDidCollapse?()
+                } else if isDraggableToExpand && newHeight > defaultHeight && !isDraggingDown {
+                    targetHeight = maximumContainerHeight
+                    delegate?.bottomSheetDidExpand?()
+                } else {
+                    targetHeight = defaultHeight
+                }
+            }
+            
+            animateContainerHeight(targetHeight)
+            currentContainerHeight = targetHeight
+            
+            dragIndicatorView.isHidden = targetHeight >= maximumContainerHeight
+        default:
+            break
+        }
+    }
+    
+    // MARK: - Animations
+    private func animateContainerHeight(_ height: CGFloat) {
+        UIView.animate(withDuration: 0.25) {
+            self.containerViewHeightConstraint?.constant = height
+            self.view.layoutIfNeeded()
+            self.dragIndicatorView.alpha = height >= self.maximumContainerHeight ? 0 : 1
+            self.dragIndicatorView.transform = .identity
+        }
+        currentContainerHeight = height
+    }
+    
+    private func animatePresentContainer() {
+        UIView.animate(withDuration: 0.3) {
+            self.containerViewBottomConstraint?.constant = 0
+            self.view.layoutIfNeeded()
+        }
+    }
+    
+    private func animateShowDimmedView() {
+        backgroundView.alpha = 0
+        UIView.animate(withDuration: 0.4) {
+            self.backgroundView.alpha = self.maxDimmedAlpha
+        }
+    }
+    
+    func animateDismissView() {
+        UIView.animate(withDuration: 0.4) {
+            self.backgroundView.alpha = 0
+        }
+        
+        UIView.animate(withDuration: 0.3, animations: {
+            self.containerViewBottomConstraint?.constant = self.defaultHeight
+            self.view.layoutIfNeeded()
+        }, completion: { _ in
+            self.dismiss(animated: false)
+        })
+        
+        delegate?.bottomSheetDidDismiss?()
+    }
+}
